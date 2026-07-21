@@ -1,0 +1,44 @@
+# Rust build and coverage output
+/target/
+/target-*/
+*.profraw
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+client_secret*.json
+token.json
+token_old.json
+report_token.json
+report_token_old.json
+*oauth-token*.json
+*.pem
+*.key
+
+# Operational classification prompts
+.classification_prompt*.txt
+classification_prompt.txt
+assets/llm/classification_prompt.txt
+assets/llm/private/
+
+# Local databases and exported mailbox data
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+/exports/
+/eval_runs/
+/fixtures/evals/private/
+
+# Deployment and local tooling output
+/.venv/
+/.idea/
+/.vscode/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Scratch files
+/scratch_pad/
+/scratch_pad_ignore.txt
