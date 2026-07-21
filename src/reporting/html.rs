@@ -154,7 +154,7 @@ mod tests {
     fn report_links_to_the_thread_in_the_correct_gmail_account() {
         let html = render_concise_report_html(
             &[ReportItem {
-                thread_id: "18f0123456789abc".to_string(),
+                thread_id: "synthetic-thread-001".to_string(),
                 account: Some("sales+quotes@example.com".to_string()),
                 state: ThreadState::QuotationReplyPending,
                 requester_name: Some("Customer".to_string()),
@@ -173,7 +173,7 @@ mod tests {
         );
 
         assert!(html.contains(
-            "href=\"https://mail.google.com/mail?authuser=sales%2Bquotes%40example.com#all/18f0123456789abc\""
+            "href=\"https://mail.google.com/mail?authuser=sales%2Bquotes%40example.com#all/synthetic-thread-001\""
         ));
         assert!(html.contains(">Customer</a>"));
         assert!(!html.contains("Open in Gmail"));
