@@ -1,0 +1,26 @@
+[package]
+name = "quotewatch"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [".", "xtask"]
+default-members = ["."]
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chacha20poly1305 = { version = "0.10", features = ["std"] }
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+libsql = "0.9"
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tiny_http = "0.12"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+urlencoding = "2"
+
+[dev-dependencies]
+mockito = "1"

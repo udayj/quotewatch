@@ -1,0 +1,80 @@
+{
+  "type": "function",
+  "function": {
+    "name": "submit_classification",
+    "description": "Submit quotation workflow classifications for every Gmail thread digest supplied by the user.",
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classifications"],
+      "properties": {
+        "classifications": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "thread_id",
+              "state",
+              "requester_name",
+              "requester_email",
+              "requester_org",
+              "subject",
+              "latest_customer_message_at",
+              "latest_company_message_at",
+              "quote_sent_at",
+              "latest_relevant_message_at",
+              "extracted_requirement",
+              "short_reason",
+              "confidence"
+            ],
+            "properties": {
+              "thread_id": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": ["QUOTATION_REPLY_PENDING", "FOLLOWUP_PENDING", "IGNORED"]
+              },
+              "requester_name": {
+                "type": ["string", "null"]
+              },
+              "requester_email": {
+                "type": ["string", "null"]
+              },
+              "requester_org": {
+                "type": ["string", "null"]
+              },
+              "subject": {
+                "type": ["string", "null"]
+              },
+              "latest_customer_message_at": {
+                "type": ["string", "null"]
+              },
+              "latest_company_message_at": {
+                "type": ["string", "null"]
+              },
+              "quote_sent_at": {
+                "type": ["string", "null"]
+              },
+              "latest_relevant_message_at": {
+                "type": ["string", "null"]
+              },
+              "extracted_requirement": {
+                "type": ["string", "null"]
+              },
+              "short_reason": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
