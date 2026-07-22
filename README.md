@@ -210,5 +210,4 @@ Production configuration and customer data are external to this repository.
 
 ## License
 
-A license has not yet been selected. Until one is added, normal copyright rules
-apply and the repository should not be assumed to grant open-source usage rights.
+QuoteWatch is licensed under the [MIT License](LICENSE).
