@@ -20,7 +20,7 @@ QuoteWatch has five main boundaries:
   structured-output tool schema.
 - The app/domain layer prepares and validates a complete run in memory.
 - The storage layer atomically commits runs, thread snapshots, classifications,
-  transitions, usage, and costs to local or remote libSQL.
+  transitions, usage, and costs to a local or remote database through libSQL.
 
 The repository map and run sequence are in
 [docs/architecture.md](docs/architecture.md). Operational configuration and

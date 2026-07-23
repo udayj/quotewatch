@@ -66,14 +66,8 @@ The repository ignores common OAuth files, tokens, private keys, `.env` variants
 operational prompt files, databases, Gmail exports, private eval fixtures, and
 generated eval runs. Ignore rules are a guardrail, not a substitute for review.
 
-Before sharing changes:
-
-1. inspect the complete Git diff and tracked-file inventory;
-2. search for email addresses, mailbox/thread IDs, service URLs, account/resource
-   names, and credential-shaped values;
-3. scan the complete Git history with a secret scanner;
-4. confirm no ignored input is required by build or default tests; and
-5. use only synthetic fixtures and examples.
+Do not commit credentials, operational prompts, mailbox exports, or real customer
+data. Use synthetic fixtures and scan proposed releases for secrets.
 
 Do not place an operational classification prompt in `assets/llm/`. Keep it at an
 ignored path or outside the checkout and select it through
