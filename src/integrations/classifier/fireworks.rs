@@ -29,7 +29,7 @@ impl FireworksClassifier {
         let api_key = std::env::var("FIREWORKS_API_KEY")
             .map_err(|_| ClassifierError::MissingEnv("FIREWORKS_API_KEY"))?;
         let model = std::env::var("FIREWORKS_MODEL")
-            .unwrap_or_else(|_| "accounts/fireworks/models/kimi-k2-instruct".to_string());
+            .unwrap_or_else(|_| "accounts/fireworks/models/glm-5p2".to_string());
         let base_url = std::env::var("FIREWORKS_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_FIREWORKS_URL.to_string());
         let pricing = Pricing::fireworks_from_env();
