@@ -25,26 +25,7 @@ pub fn render_concise_report_html(items: &[ReportItem], cost: Option<&RunCostSum
     ));
     out.push_str("</div>");
 
-    out.push_str("<div style=\"padding:18px 24px;border-bottom:1px solid #e5e7eb;\">");
-    out.push_str("<div style=\"font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#6b7280;margin-bottom:10px;\">Summary</div>");
-    out.push_str("<table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" style=\"width:100%;border-collapse:collapse;\"><tr>");
-    out.push_str(&summary_card(
-        "Quotation Pending",
-        pending.len(),
-        "#b42318",
-        "#fff4f2",
-        "#ffd6d1",
-    ));
-    out.push_str("<td style=\"width:12px;\"></td>");
-    out.push_str(&summary_card(
-        "Follow-ups Pending",
-        followups.len(),
-        "#175cd3",
-        "#eff8ff",
-        "#b2ddff",
-    ));
-    out.push_str("</tr></table>");
-    out.push_str("</div>");
+    out.push_str(&format_party_summary_table(&pending, &followups));
 
     out.push_str(&format_html_section(
         "Quotations Pending",
@@ -65,11 +46,74 @@ pub fn render_concise_report_html(items: &[ReportItem], cost: Option<&RunCostSum
     out
 }
 
-fn summary_card(label: &str, count: usize, color: &str, background: &str, border: &str) -> String {
+fn format_party_summary_table(pending: &[&ReportItem], followups: &[&ReportItem]) -> String {
+    let mut out = String::new();
+    out.push_str("<div style=\"padding:10px 24px 12px;border-bottom:1px solid #e5e7eb;background:#fbfcfd;\">");
+    out.push_str("<table aria-label=\"Action summary\" cellspacing=\"0\" cellpadding=\"0\" style=\"width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #dfe3e8;background:#ffffff;\">");
+    out.push_str("<thead><tr>");
+    out.push_str(&format!(
+        "<th scope=\"col\" style=\"width:50%;padding:5px 7px;border-right:1px solid #ffd6d1;border-bottom:1px solid #ffd6d1;background:#fff4f2;color:#b42318;font-size:11px;line-height:1.25;text-align:left;\">Quotation Pending ({})</th>",
+        pending.len()
+    ));
+    out.push_str(&format!(
+        "<th scope=\"col\" style=\"width:50%;padding:5px 7px;border-bottom:1px solid #b2ddff;background:#eff8ff;color:#175cd3;font-size:11px;line-height:1.25;text-align:left;\">Follow-ups Pending ({})</th>",
+        followups.len()
+    ));
+    out.push_str("</tr></thead><tbody>");
+
+    let row_count = pending.len().max(followups.len());
+    for index in 0..row_count {
+        out.push_str("<tr>");
+        out.push_str(&format_summary_cell(pending.get(index).copied(), true));
+        out.push_str(&format_summary_cell(followups.get(index).copied(), false));
+        out.push_str("</tr>");
+    }
+
+    out.push_str("</tbody></table></div>");
+    out
+}
+
+fn format_summary_cell(item: Option<&ReportItem>, has_right_border: bool) -> String {
+    let right_border = if has_right_border {
+        "border-right:1px solid #e5e7eb;"
+    } else {
+        ""
+    };
+    let content = item
+        .map(linked_party_name)
+        .unwrap_or_else(|| "&nbsp;".to_string());
+
     format!(
-        "<td style=\"width:50%;padding:14px 16px;border:1px solid {border};border-radius:8px;background:{background};\"><div style=\"font-size:13px;color:#374151;font-weight:700;\">{}</div><div style=\"font-size:30px;line-height:1.15;font-weight:800;color:{color};margin-top:4px;\">{count}</div></td>",
-        html_escape(label)
+        "<td style=\"padding:3px 7px;{right_border}border-bottom:1px solid #eef0f3;color:#374151;font-size:11px;line-height:1.25;vertical-align:top;overflow-wrap:anywhere;\">{content}</td>"
     )
+}
+
+fn linked_display_name(item: &ReportItem) -> String {
+    let name = display_name(item);
+    linked_name(item, &name)
+}
+
+fn linked_party_name(item: &ReportItem) -> String {
+    let name = item
+        .requester_org
+        .as_deref()
+        .or(item.requester_name.as_deref())
+        .or(item.requester_email.as_deref())
+        .unwrap_or("Unknown requester");
+    linked_name(item, name)
+}
+
+fn linked_name(item: &ReportItem, name: &str) -> String {
+    let escaped_name = html_escape(name);
+    gmail_thread_url(item)
+        .map(|url| {
+            format!(
+                "<a href=\"{}\" style=\"color:#111827;text-decoration:underline;\">{}</a>",
+                html_escape(&url),
+                escaped_name
+            )
+        })
+        .unwrap_or(escaped_name)
 }
 
 fn format_html_section(
@@ -122,16 +166,7 @@ fn format_html_item(
         .as_deref()
         .map(|value| truncate(value, 100))
         .unwrap_or_else(|| "Not extracted".to_string());
-    let display_name = html_escape(&display_name(item));
-    let linked_name = gmail_thread_url(item)
-        .map(|url| {
-            format!(
-                "<a href=\"{}\" style=\"color:#111827;text-decoration:underline;\">{}</a>",
-                html_escape(&url),
-                display_name
-            )
-        })
-        .unwrap_or(display_name);
+    let linked_name = linked_display_name(item);
 
     format!(
         "<div style=\"padding:14px 0;border-top:1px solid #eef0f3;\"><div style=\"display:flex;align-items:flex-start;gap:10px;\"><span style=\"display:inline-block;min-width:26px;height:26px;line-height:26px;text-align:center;border-radius:50%;background:{};color:#ffffff;font-size:13px;font-weight:700;\">{}</span><div style=\"display:inline-block;vertical-align:top;\"><div style=\"font-size:15px;line-height:1.35;font-weight:800;color:#111827;\">{}</div><div style=\"font-size:13px;line-height:1.5;color:#374151;margin-top:4px;\"><strong>{}:</strong> {}</div><div style=\"font-size:13px;line-height:1.5;color:#374151;\"><strong>Subject:</strong> {}</div><div style=\"font-size:13px;line-height:1.5;color:#374151;\"><strong>Requirement:</strong> {}</div></div></div></div>",
@@ -177,5 +212,56 @@ mod tests {
         ));
         assert!(html.contains(">Customer</a>"));
         assert!(!html.contains("Open in Gmail"));
+    }
+
+    #[test]
+    fn report_starts_with_a_compact_two_column_party_summary() {
+        let html = render_concise_report_html(
+            &[
+                report_item(
+                    "quote-thread",
+                    ThreadState::QuotationReplyPending,
+                    "Quotation Party",
+                ),
+                report_item(
+                    "followup-thread",
+                    ThreadState::FollowupPending,
+                    "Follow-up Party",
+                ),
+            ],
+            None,
+        );
+
+        let summary_start = html.find("aria-label=\"Action summary\"").unwrap();
+        let summary_end = summary_start + html[summary_start..].find("</table>").unwrap();
+        let summary = &html[summary_start..summary_end];
+        let detail_start = html.find("<h2").unwrap();
+
+        assert!(summary_start < detail_start);
+        assert!(html.contains("Quotation Pending (1)"));
+        assert!(html.contains("Follow-ups Pending (1)"));
+        assert!(summary.contains(">Quotation Party</a>"));
+        assert!(summary.contains(">Follow-up Party</a>"));
+        assert!(!summary.contains("Contact Name"));
+        assert!(!html.contains("font-size:30px"));
+    }
+
+    fn report_item(thread_id: &str, state: ThreadState, requester_org: &str) -> ReportItem {
+        ReportItem {
+            thread_id: thread_id.to_string(),
+            account: Some("sales@example.com".to_string()),
+            state,
+            requester_name: Some("Contact Name".to_string()),
+            requester_email: None,
+            requester_org: Some(requester_org.to_string()),
+            subject: None,
+            latest_customer_message_at: None,
+            latest_company_message_at: None,
+            quote_sent_at: None,
+            extracted_requirement: None,
+            short_reason: None,
+            confidence: 1.0,
+            expires_on: None,
+        }
     }
 }
