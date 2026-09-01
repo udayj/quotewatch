@@ -1,5 +1,6 @@
 use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
+use reqwest::header::CONTENT_TYPE;
 use serde::de::DeserializeOwned;
 use std::ops::Deref;
 use std::thread;
@@ -76,10 +77,31 @@ impl RetryableHttpClient {
 
             match request.send() {
                 Ok(response) if response.status().is_success() => {
-                    return response.json().map_err(|source| HttpError::Request {
-                        operation: operation.to_string(),
-                        source,
-                    });
+                    let metadata = response_metadata(&response);
+                    match response.json() {
+                        Ok(value) => return Ok(value),
+                        Err(error) => {
+                            let summary = format!(
+                                "{metadata}; response body decode failed: {}",
+                                error_chain(&error)
+                            );
+                            if self.policy.should_retry_decode_error(attempt, &error) {
+                                self.sleep_before_retry(operation, attempt, summary);
+                                continue;
+                            }
+                            if self.policy.is_retryable_decode_error(&error) {
+                                return Err(HttpError::RetryExhausted {
+                                    operation: operation.to_string(),
+                                    attempts: self.policy.max_attempts,
+                                    last_error: summary,
+                                });
+                            }
+                            return Err(HttpError::Request {
+                                operation: operation.to_string(),
+                                source: error,
+                            });
+                        }
+                    }
                 }
                 Ok(response) => {
                     let status = response.status();
@@ -158,6 +180,7 @@ struct RetryPolicy {
     max_attempts: usize,
     initial_delay: Duration,
     max_delay: Duration,
+    retry_decode_errors: bool,
 }
 
 impl RetryPolicy {
@@ -166,6 +189,7 @@ impl RetryPolicy {
             max_attempts: 5,
             initial_delay: Duration::from_secs(2),
             max_delay: Duration::from_secs(16),
+            retry_decode_errors: true,
         }
     }
 
@@ -174,6 +198,7 @@ impl RetryPolicy {
             max_attempts: 5,
             initial_delay: Duration::from_secs(10),
             max_delay: Duration::from_secs(40),
+            retry_decode_errors: false,
         }
     }
 
@@ -183,6 +208,7 @@ impl RetryPolicy {
             max_attempts,
             initial_delay: Duration::ZERO,
             max_delay: Duration::ZERO,
+            retry_decode_errors: true,
         }
     }
 
@@ -194,6 +220,10 @@ impl RetryPolicy {
         self.has_attempt_remaining(attempt) && self.is_retryable_error(error)
     }
 
+    fn should_retry_decode_error(&self, attempt: usize, error: &reqwest::Error) -> bool {
+        self.has_attempt_remaining(attempt) && self.is_retryable_decode_error(error)
+    }
+
     fn is_retryable_status(&self, status: StatusCode) -> bool {
         status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::TOO_MANY_REQUESTS
@@ -202,6 +232,10 @@ impl RetryPolicy {
 
     fn is_retryable_error(&self, error: &reqwest::Error) -> bool {
         error.is_timeout() || error.is_connect() || error.is_request()
+    }
+
+    fn is_retryable_decode_error(&self, error: &reqwest::Error) -> bool {
+        self.retry_decode_errors && error.is_decode()
     }
 
     fn delay(&self, attempt: usize) -> Duration {
@@ -223,6 +257,34 @@ fn response_body(response: Response) -> String {
     response
         .text()
         .unwrap_or_else(|error| format!("failed to read response body: {error}"))
+}
+
+fn response_metadata(response: &Response) -> String {
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("missing");
+    let content_length = response
+        .content_length()
+        .map_or_else(|| "unknown".to_string(), |length| length.to_string());
+    format!(
+        "HTTP {}; content-type={content_type}; content-length={content_length}",
+        response.status()
+    )
+}
+
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut messages = Vec::new();
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        let message = cause.to_string();
+        if messages.last() != Some(&message) {
+            messages.push(message);
+        }
+        current = cause.source();
+    }
+    messages.join(": ")
 }
 
 #[cfg(test)]
@@ -294,7 +356,38 @@ mod tests {
     }
 
     #[test]
-    fn execute_returns_decode_error_for_unexpected_response_shape() {
+    fn execute_retries_after_response_decode_error() {
+        let mut server = Server::new();
+        let malformed = server
+            .mock("GET", "/decode-retry")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":"#)
+            .expect(1)
+            .create();
+        let success = server
+            .mock("GET", "/decode-retry")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"ok":true}"#)
+            .expect(1)
+            .create();
+        let client = RetryableHttpClient::with_client(Client::new(), RetryPolicy::test(2));
+
+        let response: TestResponse = client
+            .execute(
+                "Test request",
+                client.get(format!("{}/decode-retry", server.url())),
+            )
+            .unwrap();
+
+        assert!(response.ok);
+        malformed.assert();
+        success.assert();
+    }
+
+    #[test]
+    fn execute_reports_decode_details_after_retries_are_exhausted() {
         let mut server = Server::new();
         let malformed = server
             .mock("GET", "/malformed")
@@ -312,7 +405,18 @@ mod tests {
             )
             .unwrap_err();
 
-        assert!(matches!(error, HttpError::Request { source, .. } if source.is_decode()));
+        let HttpError::RetryExhausted {
+            attempts,
+            last_error,
+            ..
+        } = error
+        else {
+            panic!("expected retry exhaustion");
+        };
+        assert_eq!(attempts, 1);
+        assert!(last_error.contains("HTTP 200 OK"));
+        assert!(last_error.contains("content-type=application/json"));
+        assert!(last_error.contains("missing field `value`"));
         malformed.assert();
     }
 }
