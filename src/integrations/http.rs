@@ -7,6 +7,8 @@ use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 
+mod gmail;
+
 #[derive(Debug, Error)]
 pub(crate) enum HttpError {
     #[error("failed to build HTTP client: {0}")]
@@ -75,6 +77,10 @@ impl RetryableHttpClient {
                     operation: operation.to_string(),
                 })?;
 
+            if self.policy.gmail {
+                gmail::pace_request();
+            }
+
             match request.send() {
                 Ok(response) if response.status().is_success() => {
                     let metadata = response_metadata(&response);
@@ -105,12 +111,35 @@ impl RetryableHttpClient {
                 }
                 Ok(response) => {
                     let status = response.status();
+                    let retry_after = if self.policy.gmail {
+                        gmail::retry_after(response.headers(), std::time::SystemTime::now())
+                    } else {
+                        None
+                    };
                     let body = response_body(response);
-                    if self.policy.should_retry_status(attempt, status) {
-                        self.sleep_before_retry(operation, attempt, format!("HTTP {status}"));
-                        continue;
-                    }
-                    if self.policy.is_retryable_status(status) {
+                    if self.policy.is_retryable_response(status, &body) {
+                        // Do not retry earlier than Gmail permits or let a server
+                        // header turn a bounded retry loop into an unbounded wait.
+                        if retry_after.is_some_and(|delay| delay > self.policy.max_delay) {
+                            return Err(HttpError::RetryExhausted {
+                                operation: operation.to_string(),
+                                attempts: attempt,
+                                last_error: format!(
+                                    "HTTP {status}: Retry-After exceeds the {}s maximum wait: {body}",
+                                    self.policy.max_delay.as_secs()
+                                ),
+                            });
+                        }
+                        if self.policy.has_attempt_remaining(attempt) {
+                            let delay = self.policy.delay(attempt);
+                            let delay = if self.policy.gmail {
+                                gmail::retry_delay(delay, retry_after).min(self.policy.max_delay)
+                            } else {
+                                delay
+                            };
+                            self.sleep(operation, attempt, delay, format!("HTTP {status}"));
+                            continue;
+                        }
                         return Err(HttpError::RetryExhausted {
                             operation: operation.to_string(),
                             attempts: self.policy.max_attempts,
@@ -153,10 +182,14 @@ impl RetryableHttpClient {
 
     fn sleep_before_retry(&self, operation: &str, attempt: usize, reason: String) {
         let delay = self.policy.delay(attempt);
+        self.sleep(operation, attempt, delay, reason);
+    }
+
+    fn sleep(&self, operation: &str, attempt: usize, delay: Duration, reason: String) {
         eprintln!(
-            "{operation} failed on attempt {attempt}/{}; retrying in {}s: {reason}",
+            "{operation} failed on attempt {attempt}/{}; retrying in {:.3}s: {reason}",
             self.policy.max_attempts,
-            delay.as_secs()
+            delay.as_secs_f64()
         );
         thread::sleep(delay);
     }
@@ -177,6 +210,7 @@ impl Deref for RetryableHttpClient {
 
 #[derive(Clone, Copy, Debug)]
 struct RetryPolicy {
+    gmail: bool,
     max_attempts: usize,
     initial_delay: Duration,
     max_delay: Duration,
@@ -186,15 +220,17 @@ struct RetryPolicy {
 impl RetryPolicy {
     fn gmail() -> Self {
         Self {
-            max_attempts: 5,
+            gmail: true,
+            max_attempts: 7,
             initial_delay: Duration::from_secs(2),
-            max_delay: Duration::from_secs(16),
+            max_delay: Duration::from_secs(64),
             retry_decode_errors: true,
         }
     }
 
     fn llm() -> Self {
         Self {
+            gmail: false,
             max_attempts: 5,
             initial_delay: Duration::from_secs(10),
             max_delay: Duration::from_secs(40),
@@ -205,15 +241,12 @@ impl RetryPolicy {
     #[cfg(test)]
     fn test(max_attempts: usize) -> Self {
         Self {
+            gmail: false,
             max_attempts,
             initial_delay: Duration::ZERO,
             max_delay: Duration::ZERO,
             retry_decode_errors: true,
         }
-    }
-
-    fn should_retry_status(&self, attempt: usize, status: StatusCode) -> bool {
-        self.has_attempt_remaining(attempt) && self.is_retryable_status(status)
     }
 
     fn should_retry_error(&self, attempt: usize, error: &reqwest::Error) -> bool {
@@ -224,10 +257,11 @@ impl RetryPolicy {
         self.has_attempt_remaining(attempt) && self.is_retryable_decode_error(error)
     }
 
-    fn is_retryable_status(&self, status: StatusCode) -> bool {
+    fn is_retryable_response(&self, status: StatusCode, body: &str) -> bool {
         status == StatusCode::REQUEST_TIMEOUT
             || status == StatusCode::TOO_MANY_REQUESTS
             || status.is_server_error()
+            || (self.gmail && status == StatusCode::FORBIDDEN && gmail::is_quota_error(body))
     }
 
     fn is_retryable_error(&self, error: &reqwest::Error) -> bool {
@@ -288,135 +322,4 @@ fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use mockito::Server;
-    use serde::Deserialize;
-
-    #[derive(Debug, Deserialize)]
-    struct TestResponse {
-        ok: bool,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct ExpectedShape {
-        #[serde(rename = "value")]
-        _value: String,
-    }
-
-    #[test]
-    fn execute_retries_after_too_many_requests() {
-        let mut server = Server::new();
-        let too_many_requests = server
-            .mock("GET", "/retry")
-            .with_status(429)
-            .with_body("slow down")
-            .expect(1)
-            .create();
-        let success = server
-            .mock("GET", "/retry")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":true}"#)
-            .expect(1)
-            .create();
-        let client = RetryableHttpClient::with_client(Client::new(), RetryPolicy::test(2));
-
-        let response: TestResponse = client
-            .execute(
-                "Test request",
-                client.get(format!("{}/retry", server.url())),
-            )
-            .unwrap();
-
-        assert!(response.ok);
-        too_many_requests.assert();
-        success.assert();
-    }
-
-    #[test]
-    fn execute_does_not_retry_bad_request() {
-        let mut server = Server::new();
-        let bad_request = server
-            .mock("GET", "/bad")
-            .with_status(400)
-            .with_body("bad payload")
-            .expect(1)
-            .create();
-        let client = RetryableHttpClient::with_client(Client::new(), RetryPolicy::test(2));
-
-        let error = client
-            .execute::<TestResponse>("Test request", client.get(format!("{}/bad", server.url())))
-            .unwrap_err();
-
-        assert!(
-            matches!(error, HttpError::Status { status, .. } if status == StatusCode::BAD_REQUEST)
-        );
-        bad_request.assert();
-    }
-
-    #[test]
-    fn execute_retries_after_response_decode_error() {
-        let mut server = Server::new();
-        let malformed = server
-            .mock("GET", "/decode-retry")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":"#)
-            .expect(1)
-            .create();
-        let success = server
-            .mock("GET", "/decode-retry")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"ok":true}"#)
-            .expect(1)
-            .create();
-        let client = RetryableHttpClient::with_client(Client::new(), RetryPolicy::test(2));
-
-        let response: TestResponse = client
-            .execute(
-                "Test request",
-                client.get(format!("{}/decode-retry", server.url())),
-            )
-            .unwrap();
-
-        assert!(response.ok);
-        malformed.assert();
-        success.assert();
-    }
-
-    #[test]
-    fn execute_reports_decode_details_after_retries_are_exhausted() {
-        let mut server = Server::new();
-        let malformed = server
-            .mock("GET", "/malformed")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(r#"{"unexpected":[]}"#)
-            .expect(1)
-            .create();
-        let client = RetryableHttpClient::with_client(Client::new(), RetryPolicy::test(1));
-
-        let error = client
-            .execute::<ExpectedShape>(
-                "Test request",
-                client.get(format!("{}/malformed", server.url())),
-            )
-            .unwrap_err();
-
-        let HttpError::RetryExhausted {
-            attempts,
-            last_error,
-            ..
-        } = error
-        else {
-            panic!("expected retry exhaustion");
-        };
-        assert_eq!(attempts, 1);
-        assert!(last_error.contains("HTTP 200 OK"));
-        assert!(last_error.contains("content-type=application/json"));
-        assert!(last_error.contains("missing field `value`"));
-        malformed.assert();
-    }
-}
+mod tests;
