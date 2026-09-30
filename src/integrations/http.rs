@@ -137,7 +137,15 @@ impl RetryableHttpClient {
                             } else {
                                 delay
                             };
-                            self.sleep(operation, attempt, delay, format!("HTTP {status}"));
+                            let reason = if self.policy.gmail {
+                                format!(
+                                    "HTTP {status}; {}",
+                                    gmail::retry_diagnostics(&body, retry_after)
+                                )
+                            } else {
+                                format!("HTTP {status}")
+                            };
+                            self.sleep(operation, attempt, delay, reason);
                             continue;
                         }
                         return Err(HttpError::RetryExhausted {

@@ -64,6 +64,51 @@ pub(super) fn retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Durati
     Some(date.duration_since(now).unwrap_or_default())
 }
 
+pub(super) fn retry_diagnostics(body: &str, retry_after: Option<Duration>) -> String {
+    let mut reasons = Vec::new();
+    let mut quotas = Vec::new();
+    if let Ok(body) = serde_json::from_str::<Value>(body) {
+        let error = &body["error"];
+        for entry in error["errors"].as_array().into_iter().flatten() {
+            if let Some(reason) = entry["reason"].as_str() {
+                reasons.push(reason.to_string());
+            }
+        }
+        for detail in error["details"].as_array().into_iter().flatten() {
+            if detail["@type"] != "type.googleapis.com/google.rpc.ErrorInfo" {
+                continue;
+            }
+            if let Some(reason) = detail["reason"].as_str() {
+                reasons.push(reason.to_string());
+            }
+            // Keep only quota diagnostics, excluding account identifiers and
+            // arbitrary provider content from routine retry logs.
+            let mut quota = serde_json::Map::new();
+            for key in [
+                "quota_metric",
+                "quota_limit",
+                "quota_limit_value",
+                "quota_unit",
+                "service",
+            ] {
+                if let Some(value) = detail["metadata"][key].as_str() {
+                    quota.insert(key.to_string(), Value::String(value.to_string()));
+                }
+            }
+            if !quota.is_empty() {
+                quotas.push(Value::Object(quota));
+            }
+        }
+    }
+    serde_json::json!({
+        "reasons": reasons,
+        "quotas": quotas,
+        "retry_after_ms": retry_after.map(|delay| delay.as_millis()),
+        "request_interval_ms": REQUEST_INTERVAL.as_millis(),
+    })
+    .to_string()
+}
+
 pub(super) fn retry_delay(backoff: Duration, retry_after: Option<Duration>) -> Duration {
     // Reuse the existing OS random source; jitter does not need to fail the
     // request if randomness is temporarily unavailable.
@@ -80,6 +125,29 @@ pub(super) fn retry_delay(backoff: Duration, retry_after: Option<Duration>) -> D
 mod tests {
     use super::*;
     use reqwest::header::HeaderValue;
+
+    #[test]
+    fn diagnostics_include_quota_context_without_unrelated_content() {
+        let body = r#"{"error":{"message":"private content","errors":[{"reason":"userRateLimitExceeded"}],"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"quota_limit_value":"6000","quota_metric":"gmail.googleapis.com/read_requests","consumer":"private account"}}]}}"#;
+        let diagnostics = retry_diagnostics(body, Some(Duration::from_secs(3)));
+        let value: Value = serde_json::from_str(&diagnostics).unwrap();
+        assert_eq!(value["reasons"][0], "userRateLimitExceeded");
+        assert_eq!(value["reasons"][1], "RATE_LIMIT_EXCEEDED");
+        assert_eq!(value["quotas"][0]["quota_limit_value"], "6000");
+        assert_eq!(value["retry_after_ms"], 3000);
+        assert_eq!(value["request_interval_ms"], 600);
+        assert!(!diagnostics.contains("private"));
+    }
+
+    #[test]
+    fn diagnostics_handle_missing_or_non_json_error_details() {
+        for body in ["upstream unavailable", "{}", "null"] {
+            let value: Value = serde_json::from_str(&retry_diagnostics(body, None)).unwrap();
+            assert_eq!(value["reasons"], serde_json::json!([]));
+            assert_eq!(value["quotas"], serde_json::json!([]));
+            assert!(value["retry_after_ms"].is_null());
+        }
+    }
 
     #[test]
     fn pacing_waits_only_for_the_remaining_interval() {
