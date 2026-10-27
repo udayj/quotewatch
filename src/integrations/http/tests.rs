@@ -208,7 +208,7 @@ fn execute_paces_gmail_across_clients_and_retries() {
 
     // Three attempts, including the retry, require two pacing intervals.
     // Only assert the lower bound so slow CI machines remain valid.
-    assert!(started.elapsed() >= Duration::from_millis(1_200));
+    assert!(started.elapsed() >= Duration::from_secs(3));
     first.assert();
     retry.assert();
     success.assert();

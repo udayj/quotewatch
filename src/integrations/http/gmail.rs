@@ -5,9 +5,9 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-// At most 100 reads/minute leaves headroom below Gmail's 6,000-unit limit
-// when our most expensive read, threads.get, costs 40 units.
-const REQUEST_INTERVAL: Duration = Duration::from_millis(600);
+// Full thread reads cost 120 units, so 40 requests/minute use 4,800 units
+// and leave headroom below Gmail's 6,000-unit per-user/project limit.
+const REQUEST_INTERVAL: Duration = Duration::from_millis(1_500);
 
 // Daily fetches and active-thread refreshes create separate clients. Keep
 // their pacing shared for the lifetime of this process.
@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(value["reasons"][1], "RATE_LIMIT_EXCEEDED");
         assert_eq!(value["quotas"][0]["quota_limit_value"], "6000");
         assert_eq!(value["retry_after_ms"], 3000);
-        assert_eq!(value["request_interval_ms"], 600);
+        assert_eq!(value["request_interval_ms"], 1500);
         assert!(!diagnostics.contains("private"));
     }
 
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(request_delay(Some(now), now), REQUEST_INTERVAL);
         assert_eq!(
             request_delay(Some(now), now + Duration::from_millis(250)),
-            Duration::from_millis(350)
+            Duration::from_millis(1_250)
         );
         assert_eq!(
             request_delay(Some(now), now + REQUEST_INTERVAL),
@@ -166,6 +166,14 @@ mod tests {
             request_delay(Some(now), now + Duration::from_secs(5)),
             Duration::ZERO
         );
+    }
+
+    #[test]
+    fn full_thread_reads_leave_twenty_percent_quota_headroom() {
+        let requests_per_minute =
+            Duration::from_secs(60).as_millis() / REQUEST_INTERVAL.as_millis();
+        let full_thread_quota_units = requests_per_minute * 120;
+        assert!(full_thread_quota_units <= 4_800);
     }
 
     #[test]
