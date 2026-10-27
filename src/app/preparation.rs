@@ -15,6 +15,7 @@ use crate::integrations::gmail;
 use crate::storage::database::Database;
 use chrono::{NaiveDate, Utc};
 use std::collections::HashSet;
+use std::time::Instant;
 
 pub(crate) fn prepare_run(
     db: &Database,
@@ -30,6 +31,11 @@ pub(crate) fn prepare_run(
     }
 
     let started_at = Utc::now().to_rfc3339();
+    let fetch_started = Instant::now();
+    eprintln!(
+        "Preparing {date}: fetching daily threads (limit {})",
+        args.limit
+    );
     let export = match args.input_json.as_deref() {
         Some(path) => read_export(path)?,
         None => gmail::fetch_gmail_export(
@@ -42,6 +48,11 @@ pub(crate) fn prepare_run(
             db.token_store(),
         )?,
     };
+    eprintln!(
+        "Fetched {} daily threads in {:.1}s",
+        export.threads.len(),
+        fetch_started.elapsed().as_secs_f64()
+    );
 
     prepare_run_from_export(db, classifier, args, account, date, export, started_at)
 }
@@ -86,10 +97,23 @@ fn prepare_run_from_export(
 
     let mut usage = LlmUsage::default();
     let notes = if let Some(classifier) = classifier {
-        for chunk in classifiable_digests.chunks(args.batch_size) {
+        let batch_count = classifiable_digests.len().div_ceil(args.batch_size);
+        eprintln!(
+            "Classifying {} threads in {batch_count} batches; {} threads have control labels",
+            classifiable_digests.len(),
+            ignored_digests.len()
+        );
+        for (index, chunk) in classifiable_digests.chunks(args.batch_size).enumerate() {
+            let batch_started = Instant::now();
+            eprintln!("Starting classification batch {}/{batch_count}", index + 1);
             let result = classifier.classify(chunk)?;
             usage.add(result.usage);
             classifications.extend(prepare_classifications(db, &result.batch)?);
+            eprintln!(
+                "Completed classification batch {}/{batch_count} in {:.1}s",
+                index + 1,
+                batch_started.elapsed().as_secs_f64()
+            );
         }
         None
     } else {
@@ -212,6 +236,8 @@ fn append_active_threads(
         .collect::<Vec<_>>();
     let previous_digests = db.active_digest_json_by_thread_id()?;
 
+    let refresh_started = Instant::now();
+    eprintln!("Refreshing {} additional active threads", active_ids.len());
     let extra_threads = if args.input_json.is_some() {
         db.active_stored_threads()?
             .into_iter()
@@ -226,6 +252,7 @@ fn append_active_threads(
             db.token_store(),
         )?
     };
+    let refreshed_count = extra_threads.len();
 
     let changed_threads = extra_threads
         .into_iter()
@@ -239,6 +266,11 @@ fn append_active_threads(
         })
         .collect::<Vec<_>>();
 
+    eprintln!(
+        "Refreshed {refreshed_count} active threads in {:.1}s; {} need classification",
+        refresh_started.elapsed().as_secs_f64(),
+        changed_threads.len()
+    );
     merge_threads(export, changed_threads);
     Ok(())
 }

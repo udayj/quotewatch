@@ -69,7 +69,9 @@ fn run_one_day(
     date: NaiveDate,
 ) -> Result<()> {
     let prepared = prepare_run(db, classifier, args, account, date)?;
+    eprintln!("Committing prepared run for {date}");
     db.commit_prepared_run(&prepared)?;
+    eprintln!("Committed run for {date}");
     Ok(())
 }
 
