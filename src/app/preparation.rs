@@ -230,16 +230,16 @@ fn append_active_threads(
         .map(|thread| thread.thread_id.clone())
         .collect::<HashSet<_>>();
     let active_ids = db
-        .active_thread_ids()?
+        .active_thread_ids(date)?
         .into_iter()
         .filter(|thread_id| !existing.contains(thread_id))
         .collect::<Vec<_>>();
-    let previous_digests = db.active_digest_json_by_thread_id()?;
+    let previous_digests = db.active_digest_json_by_thread_id(date)?;
 
     let refresh_started = Instant::now();
     eprintln!("Refreshing {} additional active threads", active_ids.len());
     let extra_threads = if args.input_json.is_some() {
-        db.active_stored_threads()?
+        db.active_stored_threads(date)?
             .into_iter()
             .filter(|thread| active_ids.contains(&thread.thread_id))
             .collect::<Vec<_>>()
@@ -267,7 +267,7 @@ fn append_active_threads(
         .collect::<Vec<_>>();
 
     eprintln!(
-        "Refreshed {refreshed_count} active threads in {:.1}s; {} need classification",
+        "Refreshed {refreshed_count} active threads in {:.1}s; {} changed",
         refresh_started.elapsed().as_secs_f64(),
         changed_threads.len()
     );
@@ -324,7 +324,7 @@ mod tests {
     use crate::domain::types::{
         DigestMessage, GmailMessage, MessageDirection, OmittedKeywordSummary,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn control_label_creates_ignored_classification() {
@@ -402,6 +402,63 @@ mod tests {
         assert_eq!(row_count(&db, "runs"), 0);
         assert_eq!(row_count(&db, "threads"), 0);
         assert_eq!(row_count(&db, "transitions"), 0);
+    }
+
+    #[test]
+    fn replay_skips_expired_refresh_but_keeps_expired_threads_in_daily_input() {
+        let db = Database::open_local_for_test(Path::new(":memory:")).expect("open test db");
+        for (thread_id, expires_on) in [
+            ("expired-history", "2026-06-20"),
+            ("renewed-expired", "2026-06-20"),
+            ("active", "2026-06-21"),
+        ] {
+            let thread = test_thread(thread_id, Vec::new());
+            db.exec(
+                "insert into threads(thread_id, state, expires_on, raw_thread_json, updated_at)
+                 values(?1, 'QUOTATION_REPLY_PENDING', ?2, ?3, ?4)",
+                libsql::params![
+                    thread_id,
+                    expires_on,
+                    serde_json::to_string(&thread).expect("serialize thread"),
+                    "2026-06-01T00:00:00Z"
+                ],
+            )
+            .expect("insert stored thread");
+        }
+        let export = GmailExport {
+            account: "sales@example.com".to_string(),
+            query: "after:2026/06/21 before:2026/06/22".to_string(),
+            date_window_start: date(),
+            date_window_end: date(),
+            generated_at: "2026-06-21T00:00:00Z".to_string(),
+            thread_count: 1,
+            threads: vec![test_thread("renewed-expired", Vec::new())],
+        };
+
+        let prepared = prepare_run_from_export(
+            &db,
+            None,
+            &test_run_args(true),
+            "sales@example.com",
+            date(),
+            export,
+            "2026-06-21T00:00:00Z".to_string(),
+        )
+        .expect("prepare replay");
+
+        let ids = prepared
+            .inputs
+            .iter()
+            .map(|input| input.thread.thread_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["renewed-expired", "active"]);
+        assert_eq!(prepared.threads_seen, 2);
+        assert_eq!(row_count(&db, "threads"), 3);
+        assert_eq!(
+            db.thread_state("expired-history").expect("stored state"),
+            Some(ThreadState::QuotationReplyPending)
+        );
+        assert_eq!(row_count(&db, "runs"), 0);
     }
 
     fn row_count(db: &Database, table: &str) -> i64 {
