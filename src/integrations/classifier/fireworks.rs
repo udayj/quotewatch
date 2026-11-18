@@ -29,7 +29,7 @@ impl FireworksClassifier {
         let api_key = std::env::var("FIREWORKS_API_KEY")
             .map_err(|_| ClassifierError::MissingEnv("FIREWORKS_API_KEY"))?;
         let model = std::env::var("FIREWORKS_MODEL")
-            .unwrap_or_else(|_| "accounts/fireworks/models/kimi-k2-instruct".to_string());
+            .unwrap_or_else(|_| "accounts/fireworks/models/glm-5p3".to_string());
         let base_url = std::env::var("FIREWORKS_BASE_URL")
             .unwrap_or_else(|_| DEFAULT_FIREWORKS_URL.to_string());
         let pricing = Pricing::fireworks_from_env();
@@ -64,7 +64,8 @@ impl FireworksClassifier {
             model: self.model.clone(),
             temperature: 0.0,
             max_tokens: 16_384,
-            reasoning_effort: "none".to_string(),
+            // GLM 5.3 requires thinking; disabling it returns HTTP 400.
+            reasoning_effort: "low".to_string(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -135,7 +136,7 @@ impl FireworksClassifier {
     fn send_with_retries(&self, request: &ChatRequest) -> ClassifierResult<ChatResponse> {
         self.client
             .execute(
-                "Fireworks classification",
+                &format!("Fireworks classification model={}", self.model),
                 self.client
                     .post(&self.base_url)
                     .bearer_auth(&self.api_key)

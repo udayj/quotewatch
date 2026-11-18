@@ -46,12 +46,14 @@ pub(crate) const LATEST_RUN_DATE: &str = "select as_of_date from runs order by i
 pub(crate) const ACTIVE_THREAD_IDS: &str = "
 select thread_id
 from threads
-where state in ('QUOTATION_REPLY_PENDING', 'FOLLOWUP_PENDING')";
+where state in ('QUOTATION_REPLY_PENDING', 'FOLLOWUP_PENDING')
+  and (expires_on is null or expires_on >= ?1)";
 
 pub(crate) const ACTIVE_RAW_THREADS: &str = "
 select raw_thread_json
 from threads
 where state in ('QUOTATION_REPLY_PENDING', 'FOLLOWUP_PENDING')
+  and (expires_on is null or expires_on >= ?1)
   and raw_thread_json is not null
   and raw_thread_json != '{}'";
 
@@ -59,6 +61,7 @@ pub(crate) const ACTIVE_DIGESTS: &str = "
 select thread_id, digest_json
 from threads
 where state in ('QUOTATION_REPLY_PENDING', 'FOLLOWUP_PENDING')
+  and (expires_on is null or expires_on >= ?1)
   and digest_json is not null";
 
 pub(crate) const UPDATE_THREAD_CLASSIFICATION: &str = "

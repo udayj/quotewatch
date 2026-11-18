@@ -180,7 +180,9 @@ anything committed to the repository.
 
 Gmail reads, OAuth refreshes, and classifier requests retry transient connection
 failures, timeouts, HTTP 408/429 responses, and server errors with bounded
-exponential backoff. Transient database operations use six retries. The entire
+exponential backoff. Gmail also retries response decode failures and HTTP 403
+quota errors, and paces requests to stay under Gmail's per-user quota; see
+[`docs/operations.md`](docs/operations.md#retry-policy). Transient database operations use six retries. The entire
 commit transaction is retried so `run_key` can resolve ambiguous remote failures.
 
 Report email sending is deliberately not retried automatically: a successful

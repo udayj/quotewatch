@@ -15,6 +15,9 @@ mod retry;
 mod run_commit;
 mod sql;
 
+#[cfg(test)]
+mod refresh_tests;
+
 use retry::retry_database_operation;
 
 pub type DatabaseResult<T> = std::result::Result<T, DatabaseError>;
@@ -149,18 +152,23 @@ impl Database {
 
     // Active thread refresh -------------------------------------------------
 
-    // Returns threads that remain in active workflow states. The runner uses
-    // these IDs to refresh previously pending work even when today's Gmail
-    // search result does not include the thread.
-    pub fn active_thread_ids(&self) -> DatabaseResult<Vec<String>> {
-        self.query_collect(sql::ACTIVE_THREAD_IDS, (), |row| row.get::<String>(0))
+    /// Returns pending threads that have not expired on the processing date.
+    /// Expired rows remain stored for history and can reappear in daily searches.
+    pub fn active_thread_ids(&self, as_of_date: NaiveDate) -> DatabaseResult<Vec<String>> {
+        self.query_collect(
+            sql::ACTIVE_THREAD_IDS,
+            params![as_of_date.to_string()],
+            |row| row.get::<String>(0),
+        )
     }
 
-    // Returns the last stored raw Gmail snapshots for active threads. Used only
-    // for input-json replay, where the app must avoid live Gmail fetches.
-    pub fn active_stored_threads(&self) -> DatabaseResult<Vec<GmailThread>> {
-        let raw_threads =
-            self.query_collect(sql::ACTIVE_RAW_THREADS, (), |row| row.get::<String>(0))?;
+    /// Returns unexpired pending snapshots for replay without live Gmail access.
+    pub fn active_stored_threads(&self, as_of_date: NaiveDate) -> DatabaseResult<Vec<GmailThread>> {
+        let raw_threads = self.query_collect(
+            sql::ACTIVE_RAW_THREADS,
+            params![as_of_date.to_string()],
+            |row| row.get::<String>(0),
+        )?;
         raw_threads
             .iter()
             .map(|raw| {
@@ -171,12 +179,16 @@ impl Database {
             .collect()
     }
 
-    // Returns the last digest JSON for each active thread. The runner compares
-    // message IDs against fresh/stored threads to skip unchanged active threads.
-    pub fn active_digest_json_by_thread_id(&self) -> DatabaseResult<HashMap<String, String>> {
-        let rows = self.query_collect(sql::ACTIVE_DIGESTS, (), |row| {
-            Ok((row.get::<String>(0)?, row.get::<String>(1)?))
-        })?;
+    /// Returns unexpired pending digests for detecting changed threads.
+    pub fn active_digest_json_by_thread_id(
+        &self,
+        as_of_date: NaiveDate,
+    ) -> DatabaseResult<HashMap<String, String>> {
+        let rows = self.query_collect(
+            sql::ACTIVE_DIGESTS,
+            params![as_of_date.to_string()],
+            |row| Ok((row.get::<String>(0)?, row.get::<String>(1)?)),
+        )?;
         Ok(rows.into_iter().collect())
     }
 

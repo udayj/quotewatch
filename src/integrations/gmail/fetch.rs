@@ -113,6 +113,7 @@ fn export_threads(
     control_label_names_by_id: &HashMap<String, String>,
 ) -> GmailResult<Vec<GmailThread>> {
     let mut page_token: Option<String> = None;
+    let mut page_number = 1;
     let mut seen = HashSet::new();
     let mut thread_ids = Vec::new();
 
@@ -129,7 +130,8 @@ fn export_threads(
             req = req.query(&[("pageToken", token)]);
         }
 
-        let list: Value = client.execute("Gmail message list", req)?;
+        let operation = format!("Gmail message list page {page_number} for query {query}");
+        let list: Value = client.execute(&operation, req)?;
         if let Some(messages) = list.get("messages").and_then(Value::as_array) {
             for msg in messages {
                 if let Some(thread_id) = msg.get("threadId").and_then(Value::as_str)
@@ -150,6 +152,7 @@ fn export_threads(
         if page_token.is_none() {
             break;
         }
+        page_number += 1;
     }
 
     export_threads_by_id(client, access_token, &thread_ids, control_label_names_by_id)
