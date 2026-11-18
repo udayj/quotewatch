@@ -27,7 +27,7 @@ flowchart LR
 | `src/domain/` | Gmail/thread data shapes, digest construction, workflow states, `PreparedRun`, and its invariants |
 | `src/integrations/gmail/` | OAuth client/token handling, Gmail reads, parsing, control-label lookup, and optional report sending |
 | `src/integrations/classifier/` | Provider request/response shapes, external prompt loading, tool-schema parsing, batch validation, costs, and deterministic guards |
-| `src/integrations/http.rs` | Shared bounded retry behavior for Gmail, OAuth refresh, and classifier JSON requests |
+| `src/integrations/http.rs` | Shared bounded retry behavior for Gmail, OAuth refresh, and classifier JSON requests; Gmail pacing, quota-error detection, and retry diagnostics live in `http/gmail.rs` |
 | `src/storage/` | libSQL facade, migrations, database retry policy, atomic run commits, report reads, and encrypted token storage |
 | `src/reporting/` | Concise/detailed Markdown and concise HTML rendering |
 | `xtask/` | Local classifier-regression scenario runner |
@@ -116,6 +116,13 @@ failure. A date range repeats this sequence independently for each date.
 `QUOTATION_REPLY_PENDING` rows expire seven days after the run date that set the
 state. `FOLLOWUP_PENDING` rows expire after fourteen days. `IGNORED` rows do not
 receive an actionable expiry. Reports select only unexpired actionable rows.
+
+Active-thread refresh uses the processing date: pending rows whose `expires_on`
+is before that date are skipped. Rows expiring on that date, or with no expiry,
+remain eligible. The same filter applies to live Gmail refresh and stored-input
+replay. Expired rows remain in the database for history; a thread found in the
+daily search can still be processed when new mail arrives. Backfills use their
+processing date, independently of today's date or the latest stored run.
 
 Control labels are read through `gmail.readonly` and never created or changed:
 
